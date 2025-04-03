@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import json
 import traceback
-import xlwings as xw  # Replace openpyxl with xlwings
+import openpyxl
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2 import service_account
@@ -115,78 +115,57 @@ def download_excel(service, file_id, download_path):
         raise
 
 def update_excel(path, input_data):
-    """Update specific cells in the Excel workbook based on input data using xlwings."""
+    """Update specific cells in the Excel workbook based on input data."""
     try:
-        # Initialize xlwings with visible=False to run in headless mode
-        app = xw.App(visible=False)
-        app.display_alerts = False  # Prevents Excel dialogs from appearing
-        app.screen_updating = False  # Speeds up execution
+        wb = openpyxl.load_workbook(path, keep_vba=True, data_only=True)
         
+        # Check if the required sheet exists
+        if 'Project Setup Form' not in wb.sheetnames:
+            raise Exception("Required sheet 'Project Setup Form' not found in the Excel file")
+            
+        sheet = wb['Project Setup Form']
+
+        # Check if we have any mappable data
+        updates_count = 0
+        for field in EXCEL_CELL_MAP.keys():
+            if field in input_data and input_data[field]:
+                updates_count += 1
+                
+        if updates_count == 0:
+            app.logger.warning("No mappable data found in input. Nothing to update.")
+            return False
+
+        # Create updates dictionary from input data
+        updates = {}
+        for field, cell_ref in EXCEL_CELL_MAP.items():
+            if field in input_data and input_data[field]:
+                updates[cell_ref] = input_data[field]
+                app.logger.info(f"Updating {field} in cell {cell_ref} with value: {input_data[field]}")
+
+        # Apply all updates
+        for cell_ref, value in updates.items():
+            sheet[cell_ref] = value
+
+        # Save the workbook
+        wb.save(path)
+        
+        # Explicitly close the workbook
+        wb.close()
+        
+        # Verify file was saved properly
         try:
-            # Open the workbook with xlwings
-            wb = app.books.open(path)
-            
-            # Check if the required sheet exists
-            try:
-                sheet = wb.sheets['Project Setup Form']
-            except:
-                raise Exception("Required sheet 'Project Setup Form' not found in the Excel file")
-
-            # Check if we have any mappable data
-            updates_count = 0
-            for field in EXCEL_CELL_MAP.keys():
-                if field in input_data and input_data[field]:
-                    updates_count += 1
-                    
-            if updates_count == 0:
-                app.logger.warning("No mappable data found in input. Nothing to update.")
-                wb.close()
-                app.quit()
-                return False
-
-            # Apply all updates
-            for field, cell_ref in EXCEL_CELL_MAP.items():
-                if field in input_data and input_data[field]:
-                    app.logger.info(f"Updating {field} in cell {cell_ref} with value: {input_data[field]}")
-                    sheet.range(cell_ref).value = input_data[field]
-
-            # Save the workbook (preserves VBA)
-            wb.save(path)
-            
-            # Explicitly close the workbook and quit the app
-            wb.close()
-            app.quit()
-            
-            # Verify file was saved properly
-            if not os.path.exists(path):
-                raise ValueError("Excel file not found after save operation")
-                
-            file_size = os.path.getsize(path)
-            if file_size < 5000:
-                raise ValueError(f"Excel file appears to be corrupted after save operation (too small): {file_size} bytes")
-                
+            verify_wb = openpyxl.load_workbook(path, keep_vba=True, data_only=True)
+            verify_wb.close()
             app.logger.info(f"File verification successful: {path}")
-            return True
-            
         except Exception as e:
-            # Make sure to close Excel even if there's an error
-            if 'wb' in locals():
-                try:
-                    wb.close()
-                except:
-                    pass
-            app.quit()
-            raise e
-            
+            app.logger.error(f"File verification failed: {str(e)}")
+            raise ValueError(f"Excel file appears to be corrupted after save operation: {str(e)}")
+        
+        return True
+        
     except Exception as e:
         app.logger.error(f"Excel update error: {str(e)}")
         app.logger.error(traceback.format_exc())
-        # Ensure Excel is closed
-        try:
-            if 'app' in locals():
-                app.quit()
-        except:
-            pass
         raise
 
 def upload_excel(service, file_id, path):
@@ -237,24 +216,6 @@ def upload_excel(service, file_id, path):
         app.logger.error(f"Upload error: {str(e)}")
         app.logger.error(traceback.format_exc())
         raise
-
-def kill_stray_excel_processes():
-    """Kill any stray Excel processes that might be running"""
-    try:
-        import subprocess
-        import platform
-        
-        if platform.system() == 'Windows':
-            subprocess.call('taskkill /f /im excel.exe', shell=True)
-        elif platform.system() == 'Darwin':  # macOS
-            subprocess.call('pkill -f Microsoft\ Excel', shell=True)
-        elif platform.system() == 'Linux':
-            # Excel generally doesn't run on Linux, but check for any wine processes
-            subprocess.call('pkill -f excel.exe', shell=True)
-            
-        app.logger.info("Checked for stray Excel processes")
-    except Exception as e:
-        app.logger.error(f"Error cleaning Excel processes: {str(e)}")
 
 @app.route('/', methods=['GET', 'POST'])
 def root():
@@ -411,16 +372,12 @@ def process_excel_update(file_id, data):
         service = build('drive', 'v3', credentials=creds)
         
         # Download the file
-        download_start = time.time()
         download_excel(service, file_id, temp_file)
-        download_time = time.time() - download_start
-        app.logger.info(f"Download took {download_time:.2f} seconds")
+        app.logger.info(f"Download completed in {time.time() - start_time:.2f} seconds")
         
         # Update the Excel file
-        update_start = time.time()
         update_success = update_excel(temp_file, data)
-        update_time = time.time() - update_start
-        app.logger.info(f"Excel update took {update_time:.2f} seconds")
+        app.logger.info(f"Excel update completed in {time.time() - start_time:.2f} seconds")
         
         if update_success:
             # Upload the updated file
