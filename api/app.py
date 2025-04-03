@@ -106,15 +106,31 @@ def update_excel(path, input_data):
 def upload_excel(service, file_id, path):
     """Upload updated Excel file back to Google Drive."""
     try:
+        # Log detailed file information before upload
+        file_metadata = service.files().get(fileId=file_id).execute()
+        app.logger.info(f"File metadata before upload: {file_metadata}")
+        
+        # Log file details
+        import os
+        file_size = os.path.getsize(path)
+        app.logger.info(f"Local file size: {file_size} bytes")
+
         media = MediaFileUpload(
             path,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             resumable=True
         )
+
+        # Log upload attempt details
+        app.logger.info(f"Attempting to upload file to ID: {file_id}")
+
         updated_file = service.files().update(
             fileId=file_id,
             media_body=media
         ).execute()
+        
+        # Log successful upload details
+        app.logger.info(f"Upload successful. Updated file details: {updated_file}")
         return updated_file
     except Exception as e:
         app.logger.error(f"Upload error: {str(e)}")
