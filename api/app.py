@@ -120,7 +120,7 @@ def update_excel(path, input_data):
 
 def upload_excel(service, file_id, path):
     """Upload updated Excel file back to Google Drive."""
-    try:
+     try:
         # Add support for shared drives
         file_metadata = service.files().get(
             fileId=file_id, 
@@ -129,6 +129,11 @@ def upload_excel(service, file_id, path):
         app.logger.info(f"File metadata before upload: {file_metadata}")
         app.logger.info(f"File ID being used for API call: '{file_id}'")
 
+        # Log file details
+        import os
+        file_size = os.path.getsize(path)
+        app.logger.info(f"Local file size: {file_size} bytes")
+
         # Use smaller chunk size for uploads
         media = MediaFileUpload(
             path,
@@ -136,46 +141,28 @@ def upload_excel(service, file_id, path):
             resumable=True,
             chunksize=1024*1024  # 1MB chunks
         )
+        
         app.logger.info(f"Attempting chunked upload")
+        app.logger.info(f"Attempting to upload file to ID: {file_id}")
 
-        #Track progress for debugging
         request = service.files().update(
             fileId=file_id,
             media_body=media,
             supportsAllDrives=True
         )
-         response = None
+        
+        response = None
         while response is None:
             status, response = request.next_chunk()
             if status:
                 app.logger.info(f"Upload progress: {int(status.progress() * 100)}%")
         
-        # Log file details
-        import os
-        file_size = os.path.getsize(path)
-        app.logger.info(f"Local file size: {file_size} bytes")
-
-        media = MediaFileUpload(
-            path,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            resumable=True
-        )
-
-        app.logger.info(f"Attempting to upload file to ID: {file_id}")
-
-        updated_file = service.files().update(
-            fileId=file_id,
-            media_body=media,
-            supportsAllDrives=True
-        ).execute()
-        
-        app.logger.info(f"Upload successful. Updated file details: {updated_file}")
-        return updated_file
+        app.logger.info(f"Upload successful. Updated file details: {response}")
+        return response
     except Exception as e:
         app.logger.error(f"Upload error: {str(e)}")
         app.logger.error(traceback.format_exc())
         raise
-
 # Add a handler for the root path
 @app.route('/', methods=['GET', 'POST'])
 def root():
