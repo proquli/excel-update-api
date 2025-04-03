@@ -123,47 +123,37 @@ def root():
     if request.method == 'POST':
         try:
             # Debug logging for request inspection
-            app.logger.info(f"Raw request data: {request.get_data(as_text=True)}")
+            raw_data = request.get_data(as_text=True)
+            app.logger.info(f"Raw request data: {raw_data}")
             app.logger.info(f"Request form: {request.form}")
             app.logger.info(f"Request headers: {dict(request.headers)}")
             
-            # Try to get data from different content types
+            # Initialize data dictionary
             data = {}
-            content_type = request.headers.get('Content-Type', '')
-            app.logger.info(f"Received webhook with Content-Type: {content_type}")
             
-            if 'application/json' in content_type:
-                if request.data:
-                    try:
-                        data = request.json
-                    except:
-                        app.logger.warning("Failed to parse JSON, trying form data")
-                        data = request.form.to_dict()
-            elif 'application/x-www-form-urlencoded' in content_type:
+            # First check if we have form data
+            if request.form:
                 data = request.form.to_dict()
-            else:
-                # Log raw data for debugging
-                app.logger.info(f"Raw data: {request.data}")
-                # Try to parse as form data
-                data = request.form.to_dict()
-                if not data:
-                    # If still empty, try to get raw data
-                    data = request.get_data(as_text=True)
-                    app.logger.info(f"Received raw data: {data}")
+                app.logger.info(f"Parsed form data: {data}")
+            # Then check for URL-encoded data with mismatched Content-Type
+            elif "=" in raw_data and "&" in raw_data:
+                # Parse URL-encoded data manually
+                from urllib.parse import parse_qs
+                parsed_data = parse_qs(raw_data)
+                # Convert from lists to single values
+                data = {k: v[0] for k, v in parsed_data.items()}
+                app.logger.info(f"Parsed URL-encoded data: {data}")
+            # Finally try JSON parsing
+            elif raw_data:
+                try:
+                    data = request.json
+                    app.logger.info(f"Parsed JSON data: {data}")
+                except:
+                    app.logger.warning("Failed to parse as JSON")
             
-            # Special handling for quoted keys in form data
-            if isinstance(data, dict):
-                # Handle quoted keys by creating versions without quotes
-                new_data = {}
-                for key, value in data.items():
-                    # Remove quotes from keys if present
-                    clean_key = key.strip('"')
-                    new_data[clean_key] = value
-                data = new_data
-                
             app.logger.info(f"Processed webhook data: {data}")
             
-            # Process the same way as /update-excel
+            # Process the webhook data
             if not data:
                 return jsonify({"status": "error", "message": "No data provided"}), 400
                 
