@@ -117,7 +117,7 @@ def download_excel(service, file_id, download_path):
 def update_excel(path, input_data):
     """Update specific cells in the Excel workbook based on input data."""
     try:
-        wb = openpyxl.load_workbook(path, keep_vba=True)
+         wb = openpyxl.load_workbook(path, keep_vba=True, data_only=True)
         
         # Check if the required sheet exists
         if 'Project Setup Form' not in wb.sheetnames:
@@ -154,7 +154,7 @@ def update_excel(path, input_data):
         
         # Verify file was saved properly
         try:
-            verify_wb = openpyxl.load_workbook(path, keep_vba=True)
+            verify_wb = openpyxl.load_workbook(path, keep_vba=True, data_only=True)
             verify_wb.close()
             app.logger.info(f"File verification successful: {path}")
         except Exception as e:
@@ -395,6 +395,164 @@ def process_excel_update(file_id, data):
         app.logger.error(traceback.format_exc())
         if 'temp_file' in locals() and os.path.exists(temp_file):
             os.remove(temp_file)
+
+def verify_excel_file(file_path):
+    with open(file_path, 'rb') as f:
+        header = f.read(4)
+    
+    # Excel files start with these bytes (PKZip format)
+    valid_header = header == b'PK\x03\x04'
+    
+    app.logger.info(f"Excel file header valid: {valid_header} for {file_path}")
+    return valid_header
+
+def diagnose_excel_file(file_path):
+    """
+    Diagnose potential issues with an Excel file
+    Returns information about the file structure
+    """
+    import os
+    import zipfile
+    import xml.etree.ElementTree as ET
+    
+    results = {
+        "file_exists": False,
+        "file_size": 0,
+        "is_valid_zip": False,
+        "content_types": False,
+        "workbook_xml": False,
+        "worksheets": [],
+        "custom_properties": False,
+        "vba_content": False,
+        "errors": []
+    }
+    
+    try:
+        # Basic file checks
+        if not os.path.exists(file_path):
+            results["errors"].append("File does not exist")
+            return results
+            
+        results["file_exists"] = True
+        results["file_size"] = os.path.getsize(file_path)
+        
+        if results["file_size"] < 2000:
+            results["errors"].append(f"File too small: {results['file_size']} bytes")
+        
+        # Check if it's a valid ZIP file
+        try:
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                results["is_valid_zip"] = True
+                file_list = zip_ref.namelist()
+                
+                # Check for essential Office XML components
+                if "[Content_Types].xml" in file_list:
+                    results["content_types"] = True
+                else:
+                    results["errors"].append("Missing [Content_Types].xml")
+                
+                if "xl/workbook.xml" in file_list:
+                    results["workbook_xml"] = True
+                else:
+                    results["errors"].append("Missing xl/workbook.xml")
+                
+                # Check for worksheets
+                worksheets = [f for f in file_list if f.startswith("xl/worksheets/sheet")]
+                results["worksheets"] = worksheets
+                
+                if not worksheets:
+                    results["errors"].append("No worksheets found")
+                
+                # Check for VBA content
+                vba_files = [f for f in file_list if "vbaProject" in f]
+                results["vba_content"] = len(vba_files) > 0
+                
+                # Check for custom properties
+                custom_props = [f for f in file_list if "customXml" in f]
+                results["custom_properties"] = len(custom_props) > 0
+                
+        except zipfile.BadZipFile:
+            results["is_valid_zip"] = False
+            results["errors"].append("Not a valid ZIP file (Excel files are ZIP archives)")
+            
+        except Exception as e:
+            results["errors"].append(f"Error examining ZIP structure: {str(e)}")
+        
+        # Final assessment
+        if not results["errors"]:
+            results["assessment"] = "File appears to be a valid Excel file"
+        else:
+            results["assessment"] = f"File has {len(results['errors'])} issues"
+            
+        return results
+        
+    except Exception as e:
+        results["errors"].append(f"Diagnostic error: {str(e)}")
+        return results
+
+@app.route('/diagnose', methods=['GET'])
+def diagnose_endpoint():
+    """
+    Endpoint to diagnose Excel file issues
+    Usage: /diagnose?file_id=YOUR_FILE_ID
+    """
+    file_id = request.args.get('file_id')
+    if not file_id:
+        return jsonify({"error": "No file_id provided"}), 400
+        
+    try:
+        # Set up temporary file path
+        temp_file = f"/tmp/{file_id}_diagnostic.xlsx"
+        
+        # Authenticate with Google Drive
+        creds = authenticate()
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Get file metadata
+        file_metadata = service.files().get(
+            fileId=file_id,
+            fields='name,mimeType,size',
+            supportsAllDrives=True
+        ).execute()
+        
+        # Download the file
+        try:
+            download_excel(service, file_id, temp_file)
+            download_success = True
+        except Exception as e:
+            download_success = False
+            download_error = str(e)
+        
+        # Run diagnostics
+        if download_success:
+            diagnostic_results = diagnose_excel_file(temp_file)
+            
+            # Clean up
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+                
+            return jsonify({
+                "file_metadata": file_metadata,
+                "download_success": download_success,
+                "diagnostic_results": diagnostic_results
+            })
+        else:
+            return jsonify({
+                "file_metadata": file_metadata,
+                "download_success": download_success,
+                "download_error": download_error
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f"Diagnostic error: {str(e)}")
+        
+        # Clean up in case of error
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            os.remove(temp_file)
+            
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     # For local development only - use proper WSGI server in production
