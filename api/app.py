@@ -44,20 +44,35 @@ def authenticate():
         app.logger.error(traceback.format_exc())
         raise
 
-def timed_execution(function_name):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            start = time.time()
-            app.logger.info(f"Starting {function_name}")
-            result = func(*args, **kwargs)
-            app.logger.info(f"Completed {function_name} in {time.time() - start:.2f} seconds")
-            return result
-        return wrapper
-    return decorator
+def parse_request_data(request):
+    """Helper function to parse request data from various formats"""
+    data = {}
+    raw_data = request.get_data(as_text=True)
+    
+    # First check if we have form data
+    if request.form:
+        data = request.form.to_dict()
+        app.logger.info(f"Parsed form data: {data}")
+    # Then check for URL-encoded data with mismatched Content-Type
+    elif "=" in raw_data and "&" in raw_data:
+        # Parse URL-encoded data manually
+        from urllib.parse import parse_qs
+        parsed_data = parse_qs(raw_data)
+        # Convert from lists to single values
+        data = {k: v[0] for k, v in parsed_data.items()}
+        app.logger.info(f"Parsed URL-encoded data: {data}")
+    # Finally try JSON parsing
+    elif raw_data:
+        try:
+            data = request.json
+            app.logger.info(f"Parsed JSON data: {data}")
+        except:
+            app.logger.warning("Failed to parse as JSON")
+            
+    app.logger.info(f"Processed webhook data: {data}")
+    return data
 
 
-@timed_execution("download_excel")
 def download_excel(service, file_id, download_path):
     """Download Excel file from Google Drive with timeout handling."""
     try:
@@ -142,7 +157,6 @@ def update_excel(path, input_data):
         app.logger.error(traceback.format_exc())
         raise
 
-@timed_execution("upload_excel")
 def upload_excel(service, file_id, path):
     """Upload updated Excel file back to Google Drive with timeout handling."""
     try:
@@ -196,47 +210,14 @@ def root():
             start_time = time.time()
             app.logger.info("Received webhook request")
             
-            # Log checkpoints
-            checkpoint_times = {}
-            
-            def log_checkpoint(name):
-                current_time = time.time()
-                elapsed = current_time - start_time
-                checkpoint_times[name] = elapsed
-                app.logger.info(f"CHECKPOINT - {name}: {elapsed:.2f} seconds")
-            
-            log_checkpoint("Request received")
-            
             # Debug logging for request inspection
             raw_data = request.get_data(as_text=True)
             app.logger.info(f"Raw request data: {raw_data}")
             app.logger.info(f"Request form: {request.form}")
             app.logger.info(f"Request headers: {dict(request.headers)}")
             
-            # Initialize data dictionary
-            data = {}
-            
-            # First check if we have form data
-            if request.form:
-                data = request.form.to_dict()
-                app.logger.info(f"Parsed form data: {data}")
-            # Then check for URL-encoded data with mismatched Content-Type
-            elif "=" in raw_data and "&" in raw_data:
-                # Parse URL-encoded data manually
-                from urllib.parse import parse_qs
-                parsed_data = parse_qs(raw_data)
-                # Convert from lists to single values
-                data = {k: v[0] for k, v in parsed_data.items()}
-                app.logger.info(f"Parsed URL-encoded data: {data}")
-            # Finally try JSON parsing
-            elif raw_data:
-                try:
-                    data = request.json
-                    app.logger.info(f"Parsed JSON data: {data}")
-                except:
-                    app.logger.warning("Failed to parse as JSON")
-            
-            app.logger.info(f"Processed webhook data: {data}")
+            # Parse request data
+            data = parse_request_data(request)
             
             # Process the webhook data
             if not data:
@@ -248,55 +229,20 @@ def root():
                 return jsonify({"status": "error", "message": "No file ID provided"}), 400
 
             app.logger.info(f"Original file ID received: '{file_id}'")
-                
-            # Set up temporary file path
-            temp_file = f"/tmp/{file_id}.xlsx"
             
-            # Authenticate with Google Drive
-            creds = authenticate()
-            service = build('drive', 'v3', credentials=creds)
+            # Start processing in background
+            Thread(target=process_excel_update, args=(file_id, data)).start()
             
-            # Download the file
-            download_excel(service, file_id, temp_file)
-
-            # Update the Excel file
-            update_success = update_excel(temp_file, data)
-
-            if update_success:
-                # Upload the updated file
-                upload_excel(service, file_id, temp_file)
-                
-            # Clean up
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-                
-            end_time = time.time()
-            app.logger.info(f"Request completed in {end_time - start_time:.2f} seconds")
-                
+            # Immediately return success to Zapier
             return jsonify({
-                "status": "success",
-                "message": "Excel file updated successfully" if update_success else "No updates were made"
+                "status": "accepted", 
+                "message": "Request accepted for processing"
             })
-            
-        except TimeoutError as e:
-            app.logger.error(f"Request timed out: {str(e)}")
-            return jsonify({
-                "status": "error",
-                "message": "Request timed out. Please try again."
-            }), 504
             
         except Exception as e:
             app.logger.error(f"Error processing webhook request: {str(e)}")
             app.logger.error(traceback.format_exc())
-            
-            # Clean up in case of error
-            if 'temp_file' in locals() and os.path.exists(temp_file):
-                os.remove(temp_file)
-                
-            return jsonify({
-                "status": "error",
-                "message": str(e)
-            }), 500
+            return jsonify({"status": "error", "message": str(e)}), 500
     
     # Handle GET requests (like health checks)
     return jsonify({"status": "ok", "message": "API is running"}), 200
@@ -397,6 +343,43 @@ def test_connection():
         return jsonify({"status": "success", "message": "Google Drive connection successful"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
+
+def process_excel_update(file_id, data):
+    """Background process to handle the Excel update"""
+    try:
+        app.logger.info(f"Starting background processing for file ID: {file_id}")
+        start_time = time.time()
+        
+        temp_file = f"/tmp/{file_id}.xlsx"
+        
+        # Authenticate with Google Drive
+        creds = authenticate()
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Download the file
+        download_excel(service, file_id, temp_file)
+        app.logger.info(f"Download completed in {time.time() - start_time:.2f} seconds")
+        
+        # Update the Excel file
+        update_success = update_excel(temp_file, data)
+        app.logger.info(f"Excel update completed in {time.time() - start_time:.2f} seconds")
+        
+        if update_success:
+            # Upload the updated file
+            upload_excel(service, file_id, temp_file)
+            app.logger.info(f"Upload completed in {time.time() - start_time:.2f} seconds")
+            
+        # Clean up
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+            
+        end_time = time.time()
+        app.logger.info(f"Background processing completed for file {file_id} in {end_time - start_time:.2f} seconds")
+    except Exception as e:
+        app.logger.error(f"Background processing error: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            os.remove(temp_file)
 
 if __name__ == '__main__':
     # For local development only - use proper WSGI server in production
