@@ -1,23 +1,16 @@
 from flask import Flask, request, jsonify
 import os
-import io
 import json
 import traceback
 import openpyxl
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2 import service_account
 
 app = Flask(__name__)
 
-# If modifying these SCOPES, delete the token.json file first
+# Google Drive API scope
 SCOPES = ['https://www.googleapis.com/auth/drive']
-
-# Get credentials from environment variables only
-CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
-REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN")
 
 # Map of input fields to Excel cell references
 EXCEL_CELL_MAP = {
@@ -27,10 +20,12 @@ EXCEL_CELL_MAP = {
 }
 
 def authenticate():
-    """Authenticate with Google Drive API using refresh token."""
+    """Authenticate with Google Drive API using service account."""
     try:
-        # Get service account JSON from environment variable or secure storage
+        # Get service account JSON from environment variable
         service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
+        app.logger.info(f"Authenticating with service account: {service_account_info.get('client_email', 'unknown')}")
+        
         credentials = service_account.Credentials.from_service_account_info(
             service_account_info, scopes=SCOPES)
         return credentials
@@ -53,6 +48,7 @@ def download_excel(service, file_id, download_path):
             app.logger.info(f"File exists, name: {file_metadata.get('name')}")
         except Exception as e:
             app.logger.error(f"File metadata check failed: {str(e)}")
+            raise ValueError(f"Unable to access file with ID {file_id}. Make sure the file exists and is shared with the service account.")
             
         request = service.files().get_media(
             fileId=file_id,
@@ -109,6 +105,11 @@ def update_excel(path, input_data):
             sheet[cell_ref] = value
 
         wb.save(path)
+        
+        # Verify file was saved properly
+        verify_wb = openpyxl.load_workbook(path, keep_vba=True)
+        verify_wb.close()
+        
         return True
         
     except Exception as e:
@@ -128,7 +129,6 @@ def upload_excel(service, file_id, path):
         app.logger.info(f"File ID being used for API call: '{file_id}'")
 
         # Log file details
-        import os
         file_size = os.path.getsize(path)
         app.logger.info(f"Local file size: {file_size} bytes")
 
@@ -148,7 +148,6 @@ def upload_excel(service, file_id, path):
             media_body=media,
             supportsAllDrives=True
         )
-
         
         response = None
         while response is None:
@@ -211,7 +210,6 @@ def root():
                 return jsonify({"status": "error", "message": "No file ID provided"}), 400
 
             app.logger.info(f"Original file ID received: '{file_id}'")
-            app.logger.info(f"File ID hex representation: {file_id.encode('utf-8').hex()}")
                 
             # Set up temporary file path
             temp_file = f"/tmp/{file_id}.xlsx"
@@ -223,16 +221,8 @@ def root():
             # Download the file
             download_excel(service, file_id, temp_file)
 
-            # After download
-            if os.path.getsize(temp_file) < 1000:  # Check for minimum valid size
-                raise ValueError("Downloaded file appears corrupt (too small)")
-
             # Update the Excel file
             update_success = update_excel(temp_file, data)
-            
-            # Before upload
-            wb = openpyxl.load_workbook(temp_file, keep_vba=True)
-            wb.close()  # Verify file is valid Excel format
 
             if update_success:
                 # Upload the updated file
@@ -319,7 +309,6 @@ def update_excel_api():
             "message": str(e)
         }), 500
 
-# Add at the end, just before the if __name__ == '__main__' block
 @app.route('/test_file_access', methods=['GET'])
 def test_file_access():
     file_id = request.args.get('file_id')
@@ -327,7 +316,7 @@ def test_file_access():
     try:
         creds = authenticate()
         service = build('drive', 'v3', credentials=creds)
-        file_metadata = service.files().get(fileId=file_id).execute()
+        file_metadata = service.files().get(fileId=file_id, supportsAllDrives=True).execute()
         return jsonify({"success": True, "file_name": file_metadata.get('name')})
     except Exception as e:
         app.logger.error(f"Test file access error: {str(e)}")
@@ -340,6 +329,7 @@ def list_files():
         service = build('drive', 'v3', credentials=creds)
         results = service.files().list(
             pageSize=10,
+            fields="files(id, name)",
             includeItemsFromAllDrives=True,
             supportsAllDrives=True
         ).execute()
