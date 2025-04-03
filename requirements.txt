@@ -1,6 +1,6 @@
 flask==2.0.3
 gunicorn==20.1.0
-openpyxl==3.0.9
+xlwings==0.30.12
 google-api-python-client==2.32.0
 google-auth-oauthlib==0.4.6
 werkzeug==2.0.3
