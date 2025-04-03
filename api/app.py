@@ -109,6 +109,7 @@ def upload_excel(service, file_id, path):
         # Log detailed file information before upload
         file_metadata = service.files().get(fileId=file_id).execute()
         app.logger.info(f"File metadata before upload: {file_metadata}")
+        app.logger.info(f"File ID being used for API call: '{file_id}'")
         
         # Log file details
         import os
@@ -128,7 +129,7 @@ def upload_excel(service, file_id, path):
             fileId=file_id,
             media_body=media
         ).execute()
-        
+
         # Log successful upload details
         app.logger.info(f"Upload successful. Updated file details: {updated_file}")
         return updated_file
@@ -182,6 +183,9 @@ def root():
             file_id = data.get('Current File ID')
             if not file_id:
                 return jsonify({"status": "error", "message": "No file ID provided"}), 400
+
+            app.logger.info(f"Original file ID received: '{file_id}'")
+            app.logger.info(f"File ID hex representation: {file_id.encode('utf-8').hex()}")
                 
             # Set up temporary file path
             temp_file = f"/tmp/{file_id}.xlsx"
@@ -280,6 +284,20 @@ def update_excel_api():
             "status": "error",
             "message": str(e)
         }), 500
+
+# Add at the end, just before the if __name__ == '__main__' block
+@app.route('/test_file_access', methods=['GET'])
+def test_file_access():
+    file_id = request.args.get('file_id')
+    app.logger.info(f"Testing file access for ID: '{file_id}'")
+    try:
+        creds = authenticate()
+        service = build('drive', 'v3', credentials=creds)
+        file_metadata = service.files().get(fileId=file_id).execute()
+        return jsonify({"success": True, "file_name": file_metadata.get('name')})
+    except Exception as e:
+        app.logger.error(f"Test file access error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)})
 
 if __name__ == '__main__':
     # For local development only - use proper WSGI server in production
