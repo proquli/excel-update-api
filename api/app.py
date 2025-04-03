@@ -6,8 +6,14 @@ import openpyxl
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2 import service_account
+import time
+import signal
+from functools import wraps
 
 app = Flask(__name__)
+
+# Set request timeout (in seconds)
+REQUEST_TIMEOUT = 30
 
 # Google Drive API scope
 SCOPES = ['https://www.googleapis.com/auth/drive']
@@ -18,6 +24,25 @@ EXCEL_CELL_MAP = {
     "projectNumber": "D8",  # Merged cells D8:F8
     "branch": "D6"  # Merged cells D6:G6
 }
+
+def timeout_handler(signum, frame):
+    raise TimeoutError("Request timed out")
+
+def timeout_decorator(timeout_seconds):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Set the timeout handler
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                # Disable the alarm
+                signal.alarm(0)
+        return wrapper
+    return decorator
 
 def authenticate():
     """Authenticate with Google Drive API using service account."""
@@ -34,8 +59,9 @@ def authenticate():
         app.logger.error(traceback.format_exc())
         raise
 
+@timeout_decorator(REQUEST_TIMEOUT)
 def download_excel(service, file_id, download_path):
-    """Download Excel file from Google Drive."""
+    """Download Excel file from Google Drive with timeout handling."""
     try:
         # Add support for shared drives
         app.logger.info(f"About to download file with ID: '{file_id}'")
@@ -61,6 +87,7 @@ def download_excel(service, file_id, download_path):
             done = False
             while not done:
                 status, done = downloader.next_chunk()
+                app.logger.info(f"Download progress: {int(status.progress() * 100)}%")
                 
         # Verify file is valid
         if os.path.getsize(download_path) < 1000:  # Check for minimum size
@@ -117,8 +144,9 @@ def update_excel(path, input_data):
         app.logger.error(traceback.format_exc())
         raise
 
+@timeout_decorator(REQUEST_TIMEOUT)
 def upload_excel(service, file_id, path):
-    """Upload updated Excel file back to Google Drive."""
+    """Upload updated Excel file back to Google Drive with timeout handling."""
     try:
         # Add support for shared drives
         file_metadata = service.files().get(
@@ -162,13 +190,14 @@ def upload_excel(service, file_id, path):
         app.logger.error(traceback.format_exc())
         raise
 
-
-# Add a handler for the root path
 @app.route('/', methods=['GET', 'POST'])
 def root():
     """Root endpoint that handles webhook requests from Zapier"""
     if request.method == 'POST':
         try:
+            start_time = time.time()
+            app.logger.info("Received webhook request")
+            
             # Debug logging for request inspection
             raw_data = request.get_data(as_text=True)
             app.logger.info(f"Raw request data: {raw_data}")
@@ -232,10 +261,20 @@ def root():
             if os.path.exists(temp_file):
                 os.remove(temp_file)
                 
+            end_time = time.time()
+            app.logger.info(f"Request completed in {end_time - start_time:.2f} seconds")
+                
             return jsonify({
                 "status": "success",
                 "message": "Excel file updated successfully" if update_success else "No updates were made"
             })
+            
+        except TimeoutError as e:
+            app.logger.error(f"Request timed out: {str(e)}")
+            return jsonify({
+                "status": "error",
+                "message": "Request timed out. Please try again."
+            }), 504
             
         except Exception as e:
             app.logger.error(f"Error processing webhook request: {str(e)}")
