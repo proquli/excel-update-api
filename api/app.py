@@ -6,6 +6,7 @@ import openpyxl
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from google.oauth2 import service_account
 
 app = Flask(__name__)
 
@@ -27,22 +28,11 @@ EXCEL_CELL_MAP = {
 def authenticate():
     """Authenticate with Google Drive API using refresh token."""
     try:
-        # Add more detailed logging
-        app.logger.info(f"Authenticating with Client ID: {CLIENT_ID}")
-        app.logger.info(f"Refresh token length: {len(REFRESH_TOKEN)}")
-        app.logger.info(f"Client secret length: {len(CLIENT_SECRET)}")
-        app.logger.info(f"Client ID length: {len(CLIENT_ID)}")
-        # Ensure required environment variables are set
-        if not CLIENT_ID or not CLIENT_SECRET or not REFRESH_TOKEN:
-            raise ValueError("Missing required environment variables for Google authentication")
-            
-        creds = Credentials.from_authorized_user_info({
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "refresh_token": REFRESH_TOKEN,
-            "token_uri": "https://oauth2.googleapis.com/token"
-        }, SCOPES)
-        return creds
+        # Get service account JSON from environment variable or secure storage
+        service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info, scopes=SCOPES)
+        return credentials
     except Exception as e:
         app.logger.error(f"Authentication error: {str(e)}")
         app.logger.error(traceback.format_exc())
