@@ -27,6 +27,11 @@ EXCEL_CELL_MAP = {
 def authenticate():
     """Authenticate with Google Drive API using refresh token."""
     try:
+        # Add more detailed logging
+        app.logger.info(f"Authenticating with Client ID: {CLIENT_ID}")
+        app.logger.info(f"Refresh token length: {len(REFRESH_TOKEN)}")
+        app.logger.info(f"Client secret length: {len(CLIENT_SECRET)}")
+        app.logger.info(f"Client ID length: {len(CLIENT_ID)}")
         # Ensure required environment variables are set
         if not CLIENT_ID or not CLIENT_SECRET or not REFRESH_TOKEN:
             raise ValueError("Missing required environment variables for Google authentication")
