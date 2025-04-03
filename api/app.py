@@ -51,6 +51,16 @@ def authenticate():
 def download_excel(service, file_id, download_path):
     """Download Excel file from Google Drive."""
     try:
+         # Add this log
+        app.logger.info(f"About to download file with ID: '{file_id}'")
+
+        # Try to get file metadata first to verify existence
+        try:
+            file_metadata = service.files().get(fileId=file_id).execute()
+            app.logger.info(f"File exists, name: {file_metadata.get('name')}")
+        except Exception as e:
+            app.logger.error(f"File metadata check failed: {str(e)}")
+
         request = service.files().get_media(fileId=file_id)
         fh = io.FileIO(download_path, 'wb')
         downloader = MediaIoBaseDownload(fh, request)
@@ -298,6 +308,17 @@ def test_file_access():
     except Exception as e:
         app.logger.error(f"Test file access error: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
+
+@app.route('/list_files', methods=['GET'])
+def list_files():
+    try:
+        creds = authenticate()
+        service = build('drive', 'v3', credentials=creds)
+        results = service.files().list(pageSize=10).execute()
+        files = results.get('files', [])
+        return jsonify({"files": files})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     # For local development only - use proper WSGI server in production
