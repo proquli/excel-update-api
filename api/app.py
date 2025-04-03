@@ -9,6 +9,7 @@ from google.oauth2 import service_account
 import time
 import signal
 from functools import wraps
+from threading import Thread
 
 app = Flask(__name__)
 
@@ -28,22 +29,6 @@ EXCEL_CELL_MAP = {
 def timeout_handler(signum, frame):
     raise TimeoutError("Request timed out")
 
-def timeout_decorator(timeout_seconds):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Set the timeout handler
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout_seconds)
-            try:
-                result = func(*args, **kwargs)
-                return result
-            finally:
-                # Disable the alarm
-                signal.alarm(0)
-        return wrapper
-    return decorator
-
 def authenticate():
     """Authenticate with Google Drive API using service account."""
     try:
@@ -59,7 +44,20 @@ def authenticate():
         app.logger.error(traceback.format_exc())
         raise
 
-@timeout_decorator(REQUEST_TIMEOUT)
+def timed_execution(function_name):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.time()
+            app.logger.info(f"Starting {function_name}")
+            result = func(*args, **kwargs)
+            app.logger.info(f"Completed {function_name} in {time.time() - start:.2f} seconds")
+            return result
+        return wrapper
+    return decorator
+
+
+@timed_execution("download_excel")
 def download_excel(service, file_id, download_path):
     """Download Excel file from Google Drive with timeout handling."""
     try:
@@ -144,7 +142,7 @@ def update_excel(path, input_data):
         app.logger.error(traceback.format_exc())
         raise
 
-@timeout_decorator(REQUEST_TIMEOUT)
+@timed_execution("upload_excel")
 def upload_excel(service, file_id, path):
     """Upload updated Excel file back to Google Drive with timeout handling."""
     try:
@@ -165,7 +163,7 @@ def upload_excel(service, file_id, path):
             path,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             resumable=True,
-            chunksize=1024*1024  # 1MB chunks
+            chunksize=512*1024  # Reduce to 512KB chunks
         )
         
         app.logger.info(f"Attempting chunked upload")
@@ -197,6 +195,17 @@ def root():
         try:
             start_time = time.time()
             app.logger.info("Received webhook request")
+            
+            # Log checkpoints
+            checkpoint_times = {}
+            
+            def log_checkpoint(name):
+                current_time = time.time()
+                elapsed = current_time - start_time
+                checkpoint_times[name] = elapsed
+                app.logger.info(f"CHECKPOINT - {name}: {elapsed:.2f} seconds")
+            
+            log_checkpoint("Request received")
             
             # Debug logging for request inspection
             raw_data = request.get_data(as_text=True)
@@ -377,6 +386,17 @@ def list_files():
     except Exception as e:
         app.logger.error(f"List files error: {str(e)}")
         return jsonify({"error": str(e)})
+
+@app.route('/test_connection', methods=['GET'])
+def test_connection():
+    try:
+        creds = authenticate()
+        service = build('drive', 'v3', credentials=creds)
+        # Just list a few files to test connectivity
+        results = service.files().list(pageSize=5).execute()
+        return jsonify({"status": "success", "message": "Google Drive connection successful"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == '__main__':
     # For local development only - use proper WSGI server in production
