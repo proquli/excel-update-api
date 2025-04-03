@@ -123,11 +123,32 @@ def upload_excel(service, file_id, path):
     try:
         # Add support for shared drives
         file_metadata = service.files().get(
-            fileId=file_id,
+            fileId=file_id, 
             supportsAllDrives=True
         ).execute()
         app.logger.info(f"File metadata before upload: {file_metadata}")
         app.logger.info(f"File ID being used for API call: '{file_id}'")
+
+        # Use smaller chunk size for uploads
+        media = MediaFileUpload(
+            path,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            resumable=True,
+            chunksize=1024*1024  # 1MB chunks
+        )
+        app.logger.info(f"Attempting chunked upload")
+
+        #Track progress for debugging
+        request = service.files().update(
+            fileId=file_id,
+            media_body=media,
+            supportsAllDrives=True
+        )
+         response = None
+        while response is None:
+            status, response = request.next_chunk()
+            if status:
+                app.logger.info(f"Upload progress: {int(status.progress() * 100)}%")
         
         # Log file details
         import os
