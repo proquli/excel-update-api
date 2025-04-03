@@ -67,11 +67,18 @@ def download_excel(service, file_id, download_path):
             fileId=file_id,
             supportsAllDrives=True
         )
-        fh = io.FileIO(download_path, 'wb')
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
+        
+        # Use context manager to ensure file is properly closed
+        with open(download_path, 'wb') as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                
+        # Verify file is valid
+        if os.path.getsize(download_path) < 1000:  # Check for minimum size
+            raise ValueError(f"Downloaded file appears corrupt (too small): {os.path.getsize(download_path)} bytes")
+            
         return True
     except Exception as e:
         app.logger.error(f"Download error: {str(e)}")
@@ -150,6 +157,7 @@ def upload_excel(service, file_id, path):
             media_body=media,
             supportsAllDrives=True
         )
+
         
         response = None
         while response is None:
@@ -223,10 +231,18 @@ def root():
             
             # Download the file
             download_excel(service, file_id, temp_file)
-            
+
+            # After download
+            if os.path.getsize(temp_file) < 1000:  # Check for minimum valid size
+                raise ValueError("Downloaded file appears corrupt (too small)")
+
             # Update the Excel file
             update_success = update_excel(temp_file, data)
             
+            # Before upload
+            wb = openpyxl.load_workbook(temp_file, keep_vba=True)
+            wb.close()  # Verify file is valid Excel format
+
             if update_success:
                 # Upload the updated file
                 upload_excel(service, file_id, temp_file)
