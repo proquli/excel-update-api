@@ -123,73 +123,31 @@ def root():
     """Root endpoint that handles webhook requests from Zapier"""
     if request.method == 'POST':
         try:
-            # Get the JSON data from the request
-            data = request.json
-            app.logger.info(f"Received webhook request with data: {data}")
+            # Try to get data from different content types
+            data = {}
+            content_type = request.headers.get('Content-Type', '')
+            app.logger.info(f"Received webhook with Content-Type: {content_type}")
+            
+            if 'application/json' in content_type:
+                data = request.json
+            elif 'application/x-www-form-urlencoded' in content_type:
+                data = request.form.to_dict()
+            else:
+                # Log raw data for debugging
+                app.logger.info(f"Raw data: {request.data}")
+                # Try to parse as form data
+                data = request.form.to_dict()
+                if not data:
+                    # If still empty, try to get raw data
+                    data = request.get_data(as_text=True)
+                    app.logger.info(f"Received raw data: {data}")
+                    
+            app.logger.info(f"Processed webhook data: {data}")
             
             # Process the same way as /update-excel
             if not data:
                 return jsonify({"status": "error", "message": "No data provided"}), 400
                 
-            # Get the file ID
-            file_id = data.get('Current File ID')
-            if not file_id:
-                return jsonify({"status": "error", "message": "No file ID provided"}), 400
-                
-            # Set up temporary file path
-            temp_file = f"/tmp/{file_id}.xlsx"
-            
-            # Authenticate with Google Drive
-            creds = authenticate()
-            service = build('drive', 'v3', credentials=creds)
-            
-            # Download the file
-            download_excel(service, file_id, temp_file)
-            
-            # Update the Excel file
-            update_success = update_excel(temp_file, data)
-            
-            if update_success:
-                # Upload the updated file
-                upload_excel(service, file_id, temp_file)
-                
-            # Clean up
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-                
-            return jsonify({
-                "status": "success",
-                "message": "Excel file updated successfully" if update_success else "No updates were made"
-            })
-            
-        except Exception as e:
-            app.logger.error(f"Error processing webhook request: {str(e)}")
-            app.logger.error(traceback.format_exc())
-            
-            # Clean up in case of error
-            if 'temp_file' in locals() and os.path.exists(temp_file):
-                os.remove(temp_file)
-                
-            return jsonify({
-                "status": "error",
-                "message": str(e)
-            }), 500
-    
-    # Handle GET requests (like health checks)
-    return jsonify({"status": "ok", "message": "API is running"}), 200
-
-@app.route('/update-excel', methods=['POST'])
-def update_excel_api():
-    """API endpoint to update Excel file on Google Drive"""
-    try:
-        # Get the JSON data from the request
-        data = request.json
-        app.logger.info(f"Received request with data: {data}")
-        
-        # Validate the input
-        if not data:
-            return jsonify({"status": "error", "message": "No data provided"}), 400
-            
         # Get the file ID
         file_id = data.get('Current File ID')
         if not file_id:
