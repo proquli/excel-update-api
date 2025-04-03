@@ -120,7 +120,7 @@ def update_excel(path, input_data):
 
 def upload_excel(service, file_id, path):
     """Upload updated Excel file back to Google Drive."""
-     try:
+    try:
         # Add support for shared drives
         file_metadata = service.files().get(
             fileId=file_id, 
@@ -163,6 +163,8 @@ def upload_excel(service, file_id, path):
         app.logger.error(f"Upload error: {str(e)}")
         app.logger.error(traceback.format_exc())
         raise
+
+
 # Add a handler for the root path
 @app.route('/', methods=['GET', 'POST'])
 def root():
