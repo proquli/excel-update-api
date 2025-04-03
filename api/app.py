@@ -103,8 +103,10 @@ def download_excel(service, file_id, download_path):
                 app.logger.info(f"Download progress: {int(status.progress() * 100)}%")
                 
         # Verify file is valid
-        if os.path.getsize(download_path) < 1000:  # Check for minimum size
-            raise ValueError(f"Downloaded file appears corrupt (too small): {os.path.getsize(download_path)} bytes")
+        downloaded_size = os.path.getsize(download_path)
+        app.logger.info(f"Downloaded file size: {downloaded_size} bytes")
+        if downloaded_size < 5000:  # Adjust minimum expected size as needed
+            raise ValueError(f"Downloaded file appears corrupt (too small): {downloaded_size} bytes")
             
         return True
     except Exception as e:
@@ -144,11 +146,20 @@ def update_excel(path, input_data):
         for cell_ref, value in updates.items():
             sheet[cell_ref] = value
 
+        # Save the workbook
         wb.save(path)
         
+        # Explicitly close the workbook
+        wb.close()
+        
         # Verify file was saved properly
-        verify_wb = openpyxl.load_workbook(path, keep_vba=True)
-        verify_wb.close()
+        try:
+            verify_wb = openpyxl.load_workbook(path, keep_vba=True)
+            verify_wb.close()
+            app.logger.info(f"File verification successful: {path}")
+        except Exception as e:
+            app.logger.error(f"File verification failed: {str(e)}")
+            raise ValueError(f"Excel file appears to be corrupted after save operation: {str(e)}")
         
         return True
         
@@ -171,6 +182,10 @@ def upload_excel(service, file_id, path):
         # Log file details
         file_size = os.path.getsize(path)
         app.logger.info(f"Local file size: {file_size} bytes")
+
+        # Check if file appears valid
+        if file_size < 5000:
+            raise ValueError(f"File appears too small to be a valid Excel file: {file_size} bytes")
 
         # Use smaller chunk size for uploads
         media = MediaFileUpload(
