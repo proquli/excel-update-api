@@ -10,7 +10,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 app = Flask(__name__)
 
 # If modifying these SCOPES, delete the token.json file first
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
 # Get credentials from environment variables only
 CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
