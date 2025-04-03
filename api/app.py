@@ -122,6 +122,11 @@ def root():
     """Root endpoint that handles webhook requests from Zapier"""
     if request.method == 'POST':
         try:
+            # Debug logging for request inspection
+            app.logger.info(f"Raw request data: {request.get_data(as_text=True)}")
+            app.logger.info(f"Request form: {request.form}")
+            app.logger.info(f"Request headers: {dict(request.headers)}")
+            
             # Try to get data from different content types
             data = {}
             content_type = request.headers.get('Content-Type', '')
@@ -145,7 +150,17 @@ def root():
                     # If still empty, try to get raw data
                     data = request.get_data(as_text=True)
                     app.logger.info(f"Received raw data: {data}")
-                    
+            
+            # Special handling for quoted keys in form data
+            if isinstance(data, dict):
+                # Handle quoted keys by creating versions without quotes
+                new_data = {}
+                for key, value in data.items():
+                    # Remove quotes from keys if present
+                    clean_key = key.strip('"')
+                    new_data[clean_key] = value
+                data = new_data
+                
             app.logger.info(f"Processed webhook data: {data}")
             
             # Process the same way as /update-excel
