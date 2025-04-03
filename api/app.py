@@ -51,17 +51,22 @@ def authenticate():
 def download_excel(service, file_id, download_path):
     """Download Excel file from Google Drive."""
     try:
-         # Add this log
+        # Add support for shared drives
         app.logger.info(f"About to download file with ID: '{file_id}'")
-
-        # Try to get file metadata first to verify existence
+        
         try:
-            file_metadata = service.files().get(fileId=file_id).execute()
+            file_metadata = service.files().get(
+                fileId=file_id,
+                supportsAllDrives=True
+            ).execute()
             app.logger.info(f"File exists, name: {file_metadata.get('name')}")
         except Exception as e:
             app.logger.error(f"File metadata check failed: {str(e)}")
-
-        request = service.files().get_media(fileId=file_id)
+            
+        request = service.files().get_media(
+            fileId=file_id,
+            supportsAllDrives=True
+        )
         fh = io.FileIO(download_path, 'wb')
         downloader = MediaIoBaseDownload(fh, request)
         done = False
@@ -116,8 +121,11 @@ def update_excel(path, input_data):
 def upload_excel(service, file_id, path):
     """Upload updated Excel file back to Google Drive."""
     try:
-        # Log detailed file information before upload
-        file_metadata = service.files().get(fileId=file_id).execute()
+        # Add support for shared drives
+        file_metadata = service.files().get(
+            fileId=file_id,
+            supportsAllDrives=True
+        ).execute()
         app.logger.info(f"File metadata before upload: {file_metadata}")
         app.logger.info(f"File ID being used for API call: '{file_id}'")
         
@@ -132,15 +140,14 @@ def upload_excel(service, file_id, path):
             resumable=True
         )
 
-        # Log upload attempt details
         app.logger.info(f"Attempting to upload file to ID: {file_id}")
 
         updated_file = service.files().update(
             fileId=file_id,
-            media_body=media
+            media_body=media,
+            supportsAllDrives=True
         ).execute()
-
-        # Log successful upload details
+        
         app.logger.info(f"Upload successful. Updated file details: {updated_file}")
         return updated_file
     except Exception as e:
@@ -314,10 +321,15 @@ def list_files():
     try:
         creds = authenticate()
         service = build('drive', 'v3', credentials=creds)
-        results = service.files().list(pageSize=10).execute()
+        results = service.files().list(
+            pageSize=10,
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True
+        ).execute()
         files = results.get('files', [])
         return jsonify({"files": files})
     except Exception as e:
+        app.logger.error(f"List files error: {str(e)}")
         return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
